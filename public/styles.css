@@ -482,6 +482,74 @@ input:focus, select:focus, textarea:focus {
 }
 .fade-in { animation: fadeInUp .35s ease both; }
 
+/* ---------- Floating background circles (decorative, homepage only) ---------- */
+.bg-circles {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  z-index: 0;
+  pointer-events: none;
+}
+.bg-circle {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(2px);
+  opacity: .35;
+  will-change: transform;
+}
+:root[data-theme="dark"] .bg-circle { opacity: .22; }
+
+.bg-circle-1 {
+  width: 220px; height: 220px; left: -60px; top: 8%;
+  background: var(--orange);
+  animation: floatA 22s ease-in-out infinite;
+}
+.bg-circle-2 {
+  width: 140px; height: 140px; right: 6%; top: 4%;
+  background: var(--teal);
+  animation: floatB 18s ease-in-out infinite;
+}
+.bg-circle-3 {
+  width: 90px; height: 90px; left: 12%; top: 55%;
+  background: var(--teal);
+  animation: floatC 26s ease-in-out infinite;
+}
+.bg-circle-4 {
+  width: 260px; height: 260px; right: -80px; bottom: -60px;
+  background: var(--orange);
+  animation: floatA 30s ease-in-out infinite reverse;
+}
+.bg-circle-5 {
+  width: 60px; height: 60px; right: 20%; top: 40%;
+  background: var(--ink);
+  opacity: .12;
+  animation: floatB 15s ease-in-out infinite;
+}
+
+@keyframes floatA {
+  0%   { transform: translate(0, 0) scale(1); }
+  33%  { transform: translate(40px, 60px) scale(1.08); }
+  66%  { transform: translate(-25px, 30px) scale(0.95); }
+  100% { transform: translate(0, 0) scale(1); }
+}
+@keyframes floatB {
+  0%   { transform: translate(0, 0) scale(1); }
+  50%  { transform: translate(-50px, 40px) scale(1.1); }
+  100% { transform: translate(0, 0) scale(1); }
+}
+@keyframes floatC {
+  0%   { transform: translate(0, 0) rotate(0deg); }
+  50%  { transform: translate(35px, -45px) rotate(20deg); }
+  100% { transform: translate(0, 0) rotate(0deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bg-circle { animation: none !important; }
+}
+
+/* Keep real content above the decorative circles */
+.container { position: relative; z-index: 1; }
+
 @keyframes pop {
   0% { transform: scale(1); }
   40% { transform: scale(1.08); }

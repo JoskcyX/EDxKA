@@ -9,6 +9,12 @@ services:
     envVars:
       - key: JWT_SECRET
         generateValue: true
+      - key: DATABASE_URL
+        sync: false
+      - key: ADMIN_USER
+        sync: false
+      - key: ADMIN_PASS
+        sync: false
       - key: NODE_ENV
         value: production
       - key: FRONTEND_URL

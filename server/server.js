@@ -21,6 +21,8 @@ const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
 const APP_NAME = 'EDxKa';
 const FRONTEND_URL = process.env.FRONTEND_URL || `http://localhost:${PORT}`;
 const IS_PROD = process.env.NODE_ENV === 'production';
+const ADMIN_USER = process.env.ADMIN_USER || 'admin';
+const ADMIN_PASS = process.env.ADMIN_PASS || null;
 
 app.use(cors());
 app.use(express.json());
@@ -92,6 +94,24 @@ function authRequired(req, res, next) {
 
 function publicUser(u) {
   return { id: u.id, name: u.name, email: u.email };
+}
+
+// ---------------------------------------------------------------------------
+// Admin auth — simple HTTP Basic auth gate in front of the admin page + API.
+// Set ADMIN_USER / ADMIN_PASS as env vars (never commit real values).
+// ---------------------------------------------------------------------------
+function adminAuthRequired(req, res, next) {
+  if (!ADMIN_PASS) {
+    return res.status(500).send('Admin access is not configured. Set ADMIN_PASS in your environment.');
+  }
+  const header = req.headers.authorization || '';
+  const [scheme, encoded] = header.split(' ');
+  if (scheme === 'Basic' && encoded) {
+    const [user, pass] = Buffer.from(encoded, 'base64').toString('utf-8').split(':');
+    if (user === ADMIN_USER && pass === ADMIN_PASS) return next();
+  }
+  res.set('WWW-Authenticate', 'Basic realm="EDxKa Admin"');
+  return res.status(401).send('Authentication required.');
 }
 
 function makeQuizCode() {
@@ -285,6 +305,23 @@ app.post('/api/auth/reset-password', (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// Admin — view registered tutors and students who've joined a quiz.
+// Protected by HTTP Basic auth (ADMIN_USER / ADMIN_PASS env vars), separate
+// from tutor sign-in.
+// ---------------------------------------------------------------------------
+app.get('/admin', adminAuthRequired, (req, res) => {
+  res.sendFile(path.join(__dirname, '..', 'public', 'admin.html'));
+});
+
+app.get('/api/admin/users', adminAuthRequired, (req, res) => {
+  res.json({ users: db.adminUsers() });
+});
+
+app.get('/api/admin/participants', adminAuthRequired, (req, res) => {
+  res.json({ participants: db.adminParticipants() });
+});
+
+// ---------------------------------------------------------------------------
 // Quiz routes (tutor, authenticated)
 // ---------------------------------------------------------------------------
 app.get('/api/quizzes', authRequired, (req, res) => {
@@ -327,7 +364,7 @@ app.put('/api/quizzes/:id', authRequired, requireOwnedQuiz, (req, res) => {
   const { title, subject } = req.body || {};
   if (title !== undefined) req.quiz.title = title;
   if (subject !== undefined) req.quiz.subject = subject;
-  db.saveQuiz();
+  db.saveQuiz(req.quiz);
   res.json({ quiz: publicQuiz(req.quiz, { includeAnswers: true }) });
 });
 
@@ -386,13 +423,13 @@ app.post('/api/quizzes/:id/questions', authRequired, requireOwnedQuiz, (req, res
   }
 
   req.quiz.questions.push(question);
-  db.saveQuiz();
+  db.saveQuiz(req.quiz);
   res.json({ quiz: publicQuiz(req.quiz, { includeAnswers: true }) });
 });
 
 app.delete('/api/quizzes/:id/questions/:qid', authRequired, requireOwnedQuiz, (req, res) => {
   req.quiz.questions = req.quiz.questions.filter((q) => q.id !== req.params.qid);
-  db.saveQuiz();
+  db.saveQuiz(req.quiz);
   res.json({ quiz: publicQuiz(req.quiz, { includeAnswers: true }) });
 });
 
@@ -455,7 +492,7 @@ app.post('/api/quizzes/by-code/:code/practice/submit', (req, res) => {
   quiz.practiceStats.avgScorePct = quiz.practiceStats.questionSum > 0
     ? Math.round((quiz.practiceStats.scoreSum / quiz.practiceStats.questionSum) * 100)
     : null;
-  db.saveQuiz();
+  db.saveQuiz(quiz);
 
   res.json({ score, total: results.length, results });
 });
@@ -497,14 +534,14 @@ function advanceQuestion(quizId) {
     quiz.status = 'finished';
     quiz.currentQuestionIndex = quiz.questions.length;
     computeBadges(quiz);
-    db.saveQuiz();
+    db.saveQuiz(quiz);
     clearQuizTimer(quiz.id);
     io.to(`quiz:${quiz.code}`).emit('quiz-end', { leaderboard: leaderboardFor(quiz) });
     return;
   }
   quiz.currentQuestionIndex = nextIndex;
   quiz.questionStartedAt = Date.now();
-  db.saveQuiz();
+  db.saveQuiz(quiz);
   const q = quiz.questions[nextIndex];
   io.to(`quiz:${quiz.code}`).emit('question-start', {
     index: nextIndex,
@@ -524,7 +561,7 @@ app.post('/api/quizzes/:id/open-lobby', authRequired, requireOwnedQuiz, (req, re
     return res.status(400).json({ error: 'Add at least one question before opening the lobby.' });
   }
   req.quiz.status = 'lobby';
-  db.saveQuiz();
+  db.saveQuiz(req.quiz);
   broadcastLobby(req.quiz);
   res.json({ quiz: publicQuiz(req.quiz, { includeAnswers: true }) });
 });
@@ -535,7 +572,7 @@ app.post('/api/quizzes/:id/start', authRequired, requireOwnedQuiz, (req, res) =>
   }
   req.quiz.status = 'live';
   req.quiz.currentQuestionIndex = -1;
-  db.saveQuiz();
+  db.saveQuiz(req.quiz);
   advanceQuestion(req.quiz.id);
   res.json({ quiz: publicQuiz(req.quiz, { includeAnswers: true }) });
 });
@@ -544,7 +581,7 @@ app.post('/api/quizzes/:id/end', authRequired, requireOwnedQuiz, (req, res) => {
   clearQuizTimer(req.quiz.id);
   req.quiz.status = 'finished';
   computeBadges(req.quiz);
-  db.saveQuiz();
+  db.saveQuiz(req.quiz);
   io.to(`quiz:${req.quiz.code}`).emit('quiz-end', { leaderboard: leaderboardFor(req.quiz) });
   res.json({ quiz: publicQuiz(req.quiz, { includeAnswers: true }) });
 });
@@ -598,7 +635,7 @@ app.post('/api/quizzes/:id/reset', authRequired, requireOwnedQuiz, (req, res) =>
   req.quiz.currentQuestionIndex = -1;
   req.quiz.questionStartedAt = null;
   req.quiz.participants = [];
-  db.saveQuiz();
+  db.saveQuiz(req.quiz);
   res.json({ quiz: publicQuiz(req.quiz, { includeAnswers: true }) });
 });
 
@@ -655,7 +692,7 @@ io.on('connection', (socket) => {
       joinedAt: Date.now(),
     };
     quiz.participants.push(participant);
-    db.saveQuiz();
+    db.saveQuiz(quiz);
     socket.join(`quiz:${quiz.code}`);
     ack && ack({ participantId: participant.id, status: quiz.status });
     broadcastLobby(quiz);
@@ -683,13 +720,20 @@ io.on('connection', (socket) => {
       participant.currentStreak = 0;
     }
     participant.totalTimeMs += elapsedMs;
-    db.saveQuiz();
+    db.saveQuiz(quiz);
 
     ack && ack({ correct, correctAnswer: question.correctAnswer, streak: participant.currentStreak });
     broadcastLeaderboard(quiz);
   });
 });
 
-server.listen(PORT, () => {
-  console.log(`\n${APP_NAME} server running: http://localhost:${PORT}\n`);
-});
+db.init()
+  .then(() => {
+    server.listen(PORT, () => {
+      console.log(`\n${APP_NAME} server running: http://localhost:${PORT}\n`);
+    });
+  })
+  .catch((err) => {
+    console.error('\n[EDxKa] Could not connect to Postgres. Check that DATABASE_URL is set correctly.\n', err);
+    process.exit(1);
+  });
