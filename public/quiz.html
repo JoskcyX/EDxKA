@@ -168,10 +168,16 @@
     <div class="modal" style="max-width:640px;">
       <h3 style="margin-top:0;">Bulk import questions</h3>
       <p class="muted mb-16" style="font-size:14px;">
-        Paste several questions at once, separated by a blank line. Format guide:
+        Paste several questions at once, separated by a blank line. Options can be on their
+        own lines, or all on the same line as the question — both work. Format guide:
       </p>
       <pre
-        style="background:var(--border);padding:12px 16px;border-radius:12px;font-size:12px;overflow-x:auto;white-space:pre-wrap;">Q: What is the capital of Nigeria?
+        style="background:var(--border);padding:12px 16px;border-radius:12px;font-size:12px;overflow-x:auto;white-space:pre-wrap;">Q: What is the capital of Nigeria? A) Lagos B) Abuja C) Kano D) Kaduna
+ANSWER: B
+TIME: 20
+TOPIC: Geography
+
+Q: What is the capital of Nigeria?
 A) Lagos
 B) Abuja
 C) Kano
@@ -388,6 +394,36 @@ C) 3</pre>
     });
     document.getElementById('bulkCancelBtn').addEventListener('click', () => bulkModal.classList.add('hidden'));
 
+    // Detects "…question stem… A) opt1 B) opt2 C) opt3 D) opt4" all on ONE line
+    // (the format produced by pasting from Word/PDF/exam banks) and splits it
+    // into { question, options }. Returns null if the line isn't in that shape.
+    function splitInlineOptions(line) {
+      const expected = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+      const regex = /(^|\s)([A-Za-z])\)\s*/g;
+      let m;
+      const hits = [];
+      while ((m = regex.exec(line)) !== null) {
+        hits.push({
+          letter: m[2].toUpperCase(),
+          letterStart: m.index + m[1].length,
+          contentStart: regex.lastIndex,
+        });
+      }
+      let run = [];
+      for (const h of hits) {
+        if (h.letter === expected[run.length]) run.push(h);
+        else if (h.letter === 'A') run = [h];
+      }
+      if (run.length < 2) return null;
+      const question = line.slice(0, run[0].letterStart).trim();
+      if (!question) return null;
+      const options = run.map((h, i) => {
+        const end = i + 1 < run.length ? run[i + 1].letterStart : line.length;
+        return line.slice(h.contentStart, end).trim();
+      });
+      return { question, options };
+    }
+
     function parseBulkText(text) {
       const blocks = text.split(/\n\s*\n+/).map(b => b.trim()).filter(Boolean);
       const results = [];
@@ -399,7 +435,12 @@ C) 3</pre>
 
         lines.forEach((line) => {
           let m;
-          if ((m = line.match(/^Q:\s*(.+)$/i))) { textLines.push(m[1]); return; }
+          if ((m = line.match(/^Q:\s*(.+)$/i))) {
+            const inline = splitInlineOptions(m[1]);
+            if (inline) { textLines.push(inline.question); options.push(...inline.options); }
+            else { textLines.push(m[1]); }
+            return;
+          }
           if ((m = line.match(/^([A-Za-z])[).]\s*(.+)$/))) { options.push(m[2].trim()); return; }
           if ((m = line.match(/^TYPE:\s*(\w+)$/i))) { type = m[1].toLowerCase(); return; }
           if ((m = line.match(/^ANSWER:\s*(.+)$/i))) { answer = m[1].trim(); return; }
@@ -469,8 +510,8 @@ C) 3</pre>
     <p class="success-text">${valid.length} question${valid.length === 1 ? '' : 's'} parsed successfully.</p>
     ${invalid.length ? `<p class="error-text">${invalid.length} block${invalid.length === 1 ? '' : 's'} had a problem:</p>
       ${invalid.map(r => `<div class="card question-card" style="margin-bottom:8px;"><div><div class="q-meta">${escapeHtml(r.error)}</div><div class="q-text" style="font-size:13px;">${escapeHtml(r.raw.slice(0, 80))}${r.raw.length > 80 ? '…' : ''}</div></div></div>`).join('')}` : ''}
-    ${valid.length ? `<div class="mt-8">${valid.map(q => `
-      <div class="question-card card" style="margin-bottom:8px;"><div><div class="q-type">${labelForType(q.type)} · ${q.timeLimit}s</div><div class="q-text">${escapeHtml(q.text)}</div></div></div>`).join('')}</div>` : ''}
+    ${valid.length ? `<div class="mt-8">${valid.map(r => `
+      <div class="question-card card" style="margin-bottom:8px;"><div><div class="q-type">${labelForType(r.question.type)} · ${r.question.timeLimit}s</div><div class="q-text">${escapeHtml(r.question.text)}</div></div></div>`).join('')}</div>` : ''}
   `;
       document.getElementById('bulkAddBtn').classList.toggle('hidden', valid.length === 0);
     });

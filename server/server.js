@@ -370,13 +370,13 @@ app.put('/api/quizzes/:id', authRequired, requireOwnedQuiz, (req, res) => {
 
 const QUESTION_TYPES = ['mcq', 'truefalse', 'typed', 'numeric', 'ordering'];
 
-app.post('/api/quizzes/:id/questions', authRequired, requireOwnedQuiz, (req, res) => {
-  const { type, text, options, items, correctAnswer, timeLimit, imageUrl, topic, tolerance } = req.body || {};
+// Validates + normalizes one question's raw input into a stored question
+// object. Shared by the single-question and bulk-import endpoints so both
+// enforce identical rules. Returns { question } or { error }.
+function buildQuestion(input) {
+  const { type, text, options, items, correctAnswer, timeLimit, imageUrl, topic, tolerance } = input || {};
   if (!type || !QUESTION_TYPES.includes(type) || !text) {
-    return res.status(400).json({ error: 'Question needs a valid type and text.' });
-  }
-  if (req.quiz.status !== 'draft') {
-    return res.status(400).json({ error: 'Stop the session before editing questions.' });
+    return { error: 'Question needs a valid type and text.' };
   }
 
   const question = {
@@ -393,36 +393,70 @@ app.post('/api/quizzes/:id/questions', authRequired, requireOwnedQuiz, (req, res
 
   if (type === 'mcq') {
     const opts = (options || []).map((o) => String(o).trim()).filter(Boolean);
-    if (opts.length < 2) return res.status(400).json({ error: 'Add at least two options.' });
+    if (opts.length < 2) return { error: 'Add at least two options.' };
     if (!correctAnswer || !opts.includes(String(correctAnswer))) {
-      return res.status(400).json({ error: 'Correct answer must match one option exactly.' });
+      return { error: 'Correct answer must match one option exactly.' };
     }
     question.options = opts;
     question.correctAnswer = String(correctAnswer);
   } else if (type === 'truefalse') {
     if (!['true', 'false'].includes(String(correctAnswer || '').toLowerCase())) {
-      return res.status(400).json({ error: 'Correct answer must be True or False.' });
+      return { error: 'Correct answer must be True or False.' };
     }
     question.options = ['True', 'False'];
     question.correctAnswer = String(correctAnswer);
   } else if (type === 'typed') {
     // Accept several acceptable answers separated by "|" (fill-in-the-blank friendly)
-    if (!correctAnswer) return res.status(400).json({ error: 'Add at least one accepted answer.' });
+    if (!correctAnswer) return { error: 'Add at least one accepted answer.' };
     question.correctAnswer = String(correctAnswer);
   } else if (type === 'numeric') {
     if (correctAnswer === undefined || correctAnswer === '' || isNaN(Number(correctAnswer))) {
-      return res.status(400).json({ error: 'Correct answer must be a number.' });
+      return { error: 'Correct answer must be a number.' };
     }
     question.correctAnswer = String(Number(correctAnswer));
     question.tolerance = Number(tolerance) >= 0 ? Number(tolerance) : 0;
   } else if (type === 'ordering') {
     const list = (items || []).map((o) => String(o).trim()).filter(Boolean);
-    if (list.length < 2) return res.status(400).json({ error: 'Add at least two items to order.' });
+    if (list.length < 2) return { error: 'Add at least two items to order.' };
     question.items = list; // canonical correct order is exactly this list
     question.correctAnswer = list.join('|');
   }
 
-  req.quiz.questions.push(question);
+  return { question };
+}
+
+app.post('/api/quizzes/:id/questions', authRequired, requireOwnedQuiz, (req, res) => {
+  if (req.quiz.status !== 'draft') {
+    return res.status(400).json({ error: 'Stop the session before editing questions.' });
+  }
+  const result = buildQuestion(req.body);
+  if (result.error) return res.status(400).json({ error: result.error });
+
+  req.quiz.questions.push(result.question);
+  db.saveQuiz(req.quiz);
+  res.json({ quiz: publicQuiz(req.quiz, { includeAnswers: true }) });
+});
+
+// Bulk import: adds many questions in one request (used by the "Bulk import" modal).
+app.post('/api/quizzes/:id/questions/bulk', authRequired, requireOwnedQuiz, (req, res) => {
+  if (req.quiz.status !== 'draft') {
+    return res.status(400).json({ error: 'Stop the session before editing questions.' });
+  }
+  const { questions } = req.body || {};
+  if (!Array.isArray(questions) || questions.length === 0) {
+    return res.status(400).json({ error: 'No questions to add.' });
+  }
+
+  const built = [];
+  for (let i = 0; i < questions.length; i++) {
+    const result = buildQuestion(questions[i]);
+    if (result.error) {
+      return res.status(400).json({ error: `Question ${i + 1}: ${result.error}` });
+    }
+    built.push(result.question);
+  }
+
+  req.quiz.questions.push(...built);
   db.saveQuiz(req.quiz);
   res.json({ quiz: publicQuiz(req.quiz, { includeAnswers: true }) });
 });
